@@ -1,0 +1,129 @@
+version: '3.8'
+
+services:
+  # 1. PostgreSQL with PostGIS & pgvector
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: rural_digital_twin_db
+    environment:
+      POSTGRES_DB: rural_twin_db
+      POSTGRES_USER: rural_user
+      POSTGRES_PASSWORD: rural_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rural_user -d rural_twin_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. Redis Message Broker & Cache
+  redis:
+    image: redis:7.2-alpine
+    container_name: rural_digital_twin_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # 3. MinIO S3-Compatible Object Storage
+  minio:
+    image: minio/minio:RELEASE.2024-03-30T09-41-56Z
+    container_name: rural_digital_twin_minio
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadminpassword
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  # 4. MLflow Experiment & Model Registry
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.12.1
+    container_name: rural_digital_twin_mlflow
+    environment:
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadminpassword
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+    ports:
+      - "5000:5000"
+    command: >
+      mlflow server
+      --backend-store-uri postgresql://rural_user:rural_password@db:5432/rural_twin_db
+      --default-artifact-root s3://mlflow-artifacts/
+      --host 0.0.0.0
+      --port 5000
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_started
+
+  # 5. FastAPI Backend API
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: rural_digital_twin_api
+    environment:
+      DATABASE_URL: postgresql://rural_user:rural_password@db:5432/rural_twin_db
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadminpassword
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      PORT: 8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # 6. Celery Async Task Worker
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: rural_digital_twin_worker
+    environment:
+      DATABASE_URL: postgresql://rural_user:rural_password@db:5432/rural_twin_db
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadminpassword
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # 7. Langflow Microservice
+  langflow:
+    image: langflowai/langflow:1.0.12
+    container_name: rural_digital_twin_langflow
+    ports:
+      - "7860:7860"
+    environment:
+      LANGFLOW_DATABASE_URL: postgresql://rural_user:rural_password@db:5432/rural_twin_db
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:

@@ -1,0 +1,8 @@
+{
+  "name": "Gemelo Digital de Hogares Rurales de Sudamérica",
+  "description": "Simulación basada en agentes, econometría y evaluación de transferencias monetarias y resiliencia climática en los 12 países de Sudamérica.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
